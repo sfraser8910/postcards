@@ -1,0 +1,125 @@
+---
+title: "Voting and Postcards"
+author: "Surya Fraser"
+format: html
+execute: 
+  echo: false
+---
+
+```{r}
+#| message: false
+library(tidyverse)
+library(primer.data)
+library(tidymodels) 
+library(broom)
+```
+
+```{r}
+x<-shaming |> 
+  mutate(civ_engage = primary_00 + primary_02 + primary_04 + 
+                      general_00 + general_02 + general_04) |> 
+  select(primary_06, treatment, sex, age, civ_engage) |>
+  mutate(
+    voter_class = case_when(
+      civ_engage %in% c(5, 6) ~ "Always Vote",
+      civ_engage %in% c(3, 4) ~ "Sometimes Vote",
+      civ_engage %in% c(1, 2) ~ "Rarely Vote"
+    ),
+    voter_class = factor(voter_class, 
+                         levels = c("Rarely Vote", "Sometimes Vote", "Always Vote"),
+                         ordered = TRUE)
+  )|>mutate(voted=as.factor(primary_06))
+```
+
+$$\log\left( \frac{\Pr(Y = 1)}{\Pr(Y = 0)} \right) = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + \cdots + \beta_p X_p$$ 
+
+$$\log\left( \frac{\Pr(\text{voted} = 1)}{\Pr(\text{voted} = 0)} \right) = 
+\beta_0 + \beta_1 \cdot \text{sex} + \beta_2 \cdot \text{age} + \beta_3 \cdot \text{treatment} + 
+\beta_4 \cdot \text{voter\_class} + \beta_5 \cdot (\text{treatment} \times \text{voter\_class})$$
+
+```{r}
+ #| cache: true
+fit_vote<-logistic_reg(engine = "glm")|>fit(voted ~ sex + age + treatment*voter_class, data = x)|>tidy(conf.int = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(gt)
+
+# Assuming your tibble is named model_tbl
+model_tbl <- tibble::tibble(
+  term = c("(Intercept)", "age", "sexMale", 
+           "treatmentCivic Duty", "treatmentHawthorne", "treatmentSelf", "treatmentNeighbors",
+           "voter_classSometimes Vote", "voter_classAlways Vote",
+           "treatmentCivic Duty:voter_classSometimes Vote"),
+  estimate = c(-2.434345037, 0.012087706, 0.035583881,
+               0.086052489, 0.070663507, 0.202358812, 0.358818468,
+               0.819714170, 1.608953223,
+               0.030789566)
+)
+
+# Format the table with gt
+model_tbl |>
+  mutate(estimate = round(estimate, 3)) |>
+  gt() |>
+  tab_header(
+    title = "Logistic Regression Estimates",
+    subtitle = "Predicting Voting Behavior"
+  ) |>
+  cols_label(
+    term = "Term",
+    estimate = "Estimate"
+  ) |>
+  fmt_number(
+    columns = estimate,
+    decimals = 3
+  ) |>
+  tab_style(
+    style = list(
+      cell_text(weight = "bold")
+    ),
+    locations = cells_column_labels(everything())
+  ) |>
+  opt_table_outline()
+
+```
+
+```{r}
+library(marginaleffects)
+library(ggplot2)
+library(dplyr)
+
+# Compute marginal effects (difference vs. control)
+effects <- predictions(
+  fit_vote,
+  type = "response",
+  by = c("treatment", "group", "voter_class"),
+  newdata = datagrid(treatment = unique(x$treatment),
+                     voter_class = unique(x$voter_class),
+                     group = "all"),
+  comparison = "reference",
+  reference = "treatment == 'Control'"  # Adjust this if control group is named differently
+)
+
+# Filter to only the probability of voting (not not voting)
+# If needed, you can also directly subtract predictions manually
+
+# Plot marginal effects
+ggplot(effects, aes(x = treatment, y = estimate, fill = voter_class)) +
+  geom_col(position = position_dodge(width = 0.7)) +
+  facet_wrap(~voter_class) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                position = position_dodge(width = 0.7),
+                width = 0.2) +
+  labs(
+    title = "Treatment Effects on Probability of Voting",
+    subtitle = "Compared to Control Group (No Postcard)",
+    y = "Change in Probability of Voting",
+    x = "Treatment"
+  ) +
+  theme_minimal() +
+  ylim(0, NA)  # Ensures common y-axis across facets
+
+```
+
+During elections, officials are always interested in getting more poeople interested in voting. Using data from the paper "Social Pressure and Voter Turnout: Evidence from a Large-Scale Field Experiment" by Gerber, Green, and Larimer (2008), I attempted to determine "What is the causal effect on voting of receiving a postcard which encourages one to vote?" One possible weakness in this approachis that treatment assignments may not have been randomized, meaning the assumption of unconfoundedness may not hold. I model the effect of sending voters postcards on their decisions to vote in the 2006 with a linear function. Ultimately, the estimate for treatmentCivic Duty was 0.08605249
